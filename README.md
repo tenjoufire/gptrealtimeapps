@@ -1,39 +1,83 @@
-# CopilotSkillsDemoDemo
+# GPT Realtime 1.5 Voice Help Desk
 
-Azure / GitHub ワークショップ作成を支援する **GitHub Copilot Agent Skills** を提供するリポジトリです。
+音声で問い合わせできるヘルプデスクアプリケーションです。構成は次の 2 つです。
 
-## 📦 含まれる Agent Skills
+- `web-ui`: React + Vite のブラウザアプリ。WebRTC で GPT Realtime 1.5 と音声セッションを張ります。
+- `agent-app`: Node.js + Express のバックエンド。SDP を proxy し、Realtime セッションを observer 接続で監視して Azure AI Search の tool call を実行します。
 
-| スキル名 | ディレクトリ | 説明 |
-|----------|-------------|------|
-| Azure IaC Architect | `.github/skills/azure-iac-architect/` | アプリケーションに最適な Azure 環境をヒアリングし、CAF/WAF に基づいた IaC（Bicep/Terraform）を生成 |
-| Workshop Planner | `.github/skills/workshop-planner/` | ワークショップ全体の企画・設計（テーマ選定、アジェンダ作成、事前準備チェックリスト等） |
-| Hands-on Lab Creator | `.github/skills/hands-on-lab-creator/` | ハンズオンラボの演習手順書を作成（ステップバイステップ手順、チェックポイント、エラー対処等） |
-| Workshop README Generator | `.github/skills/workshop-readme-generator/` | ワークショップリポジトリ用のドキュメント一式を生成（README、セットアップガイド、講師ガイド等） |
+## ディレクトリ構成
 
-## 🚀 使い方
+```text
+.
+├── agent-app/
+├── web-ui/
+├── docker-compose.yml
+└── plan.md
+```
 
-### このリポジトリで使う場合
-1. Copilot coding agent、GitHub Copilot CLI、または VS Code のエージェントモードでタスクを依頼する
-2. Copilot がタスクに応じて関連するスキルを自動的に読み込み、専門的な指示に従って作業を行います
+## 前提条件
 
-### 他のリポジトリで使う場合（再配布）
-1. `.github/skills/` ディレクトリ内の各スキルフォルダ（`SKILL.md` を含む）をコピー
-2. 対象リポジトリの `.github/skills/` に配置
-3. そのリポジトリで Copilot Agent が自動的にスキルを利用可能になります
+- Azure OpenAI リソース
+- GPT Realtime 1.5 のデプロイ
+- Azure AI Search インデックス
+- Azure CLI でのログイン、または Container Apps 上の Managed Identity
 
-> 📖 詳細は [Creating agent skills for GitHub Copilot](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/create-skills) を参照してください。
+## ローカル実行
 
-## 💡 使用例
+### 1. バックエンドの設定
 
-### Azure IaC を設計・生成する
-> Azure OpenAI を使った Python FastAPI アプリを Azure にデプロイしたいです。IaC を設計・生成してください。
+```bash
+cd agent-app
+cp .env.example .env
+npm install
+npm run dev
+```
 
-### ワークショップを企画する
-> Azure OpenAI と GitHub Copilot を活用した AI アプリ開発の半日ワークショップを企画してください。対象者は Web 開発経験のあるエンジニアです。
+### 2. フロントエンドの設定
 
-### ハンズオンラボを作成する
-> GitHub Actions で Azure App Service にデプロイする CI/CD パイプライン構築のハンズオンラボを作成してください。難易度は初級でお願いします。
+```bash
+cd web-ui
+cp .env.example .env
+npm install
+npm run dev
+```
 
-### ドキュメントを生成する
-> このワークショップリポジトリの README とセットアップガイドを生成してください。
+### 3. ブラウザで開く
+
+- Web UI: http://localhost:5173
+- Agent App health check: http://localhost:8080/health
+
+## Docker での起動
+
+```bash
+docker compose up --build
+```
+
+`agent-app/.env` は事前に作成しておく必要があります。
+
+## 実装の要点
+
+- ブラウザは `RTCPeerConnection` で音声を送受信
+- ブラウザは SDP Offer を `agent-app` の `/api/realtime/connect` に送信
+- `agent-app` は Azure OpenAI の `client_secrets` と `realtime/calls` を使って接続を中継
+- `agent-app` は `wss://.../openai/v1/realtime?call_id=...` に observer 接続
+- モデルが `search_knowledge_base` を呼ぶと、Azure AI Search を検索して `function_call_output` を返却
+
+## Azure OpenAI / Foundry 設定値
+
+`AZURE_OPENAI_ENDPOINT` にはリソース名ではなく Target URI をそのまま入れます。
+
+例:
+
+```dotenv
+AZURE_OPENAI_ENDPOINT=https://admin-2781-resource.cognitiveservices.azure.com
+```
+
+Azure AI Search がまだ無い場合は、`MOCK_SEARCH=true` でモック応答に切り替えられます。
+
+## 次の実装候補
+
+- 検索結果の citation 表示
+- 会話履歴の永続化
+- Container Apps 用の Bicep 定義
+- Blob Storage からの indexer 自動構築
