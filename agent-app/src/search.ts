@@ -1,6 +1,5 @@
-import { DefaultAzureCredential } from "@azure/identity";
-
 import { config } from "./config.js";
+import { credential } from "./credential.js";
 
 export interface SearchResult {
   id: string;
@@ -10,8 +9,6 @@ export interface SearchResult {
   url?: string;
   score?: number;
 }
-
-const credential = new DefaultAzureCredential();
 
 function buildMockResults(query: string): SearchResult[] {
   return [

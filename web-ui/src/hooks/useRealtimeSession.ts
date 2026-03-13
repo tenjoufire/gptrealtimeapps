@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { TranscriptEntry } from "../components/TranscriptPanel";
+import { agentApiBaseUrl } from "../config";
 
 type SessionStatus = "idle" | "connecting" | "connected" | "error";
 
@@ -21,8 +22,6 @@ interface RealtimeEvent {
     }>;
   };
 }
-
-const agentApiBaseUrl = import.meta.env.VITE_AGENT_API_BASE_URL ?? "http://localhost:8080";
 
 function randomId(): string {
   return globalThis.crypto.randomUUID();

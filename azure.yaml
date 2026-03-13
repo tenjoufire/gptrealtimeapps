@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+
+name: gptrealtimeapps
+metadata:
+  template: gptrealtimeapps@0.0.1
+infra:
+  provider: bicep
+  path: infra
+services:
+  agent-app:
+    project: ./agent-app
+    host: containerapp
+    language: docker
+    docker:
+      path: ./Dockerfile
+      context: .
+  web-ui:
+    project: ./web-ui
+    host: containerapp
+    language: docker
+    docker:
+      path: ./Dockerfile
+      context: .

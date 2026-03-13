@@ -4,6 +4,7 @@ export interface AppConfig {
   port: number;
   allowedOrigin: string;
   logLevel: string;
+  azureClientId?: string;
   azureOpenAIEndpoint: string;
   azureOpenAIRealtimeDeployment: string;
   azureOpenAIRealtimeVoice: string;
@@ -57,6 +58,7 @@ export const config: AppConfig = {
   port: getNumber("PORT", 8080),
   allowedOrigin: process.env.ALLOWED_ORIGIN ?? "http://localhost:5173",
   logLevel: process.env.LOG_LEVEL ?? "info",
+  azureClientId: process.env.AZURE_CLIENT_ID,
   azureOpenAIEndpoint: normalizeEndpoint(getRequired("AZURE_OPENAI_ENDPOINT")),
   azureOpenAIRealtimeDeployment: getRequired("AZURE_OPENAI_REALTIME_DEPLOYMENT"),
   azureOpenAIRealtimeVoice: process.env.AZURE_OPENAI_REALTIME_VOICE ?? "coral",

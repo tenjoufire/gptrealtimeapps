@@ -1,7 +1,7 @@
-import { DefaultAzureCredential } from "@azure/identity";
 import WebSocket from "ws";
 
 import { config } from "./config.js";
+import { credential } from "./credential.js";
 import { executeTool, realtimeTools } from "./tools.js";
 
 interface ConnectResult {
@@ -24,7 +24,6 @@ interface RealtimeFunctionCallEvent {
   callId?: string;
 }
 
-const credential = new DefaultAzureCredential();
 const activeObservers = new Map<string, WebSocket>();
 
 function log(message: string, extra?: unknown): void {

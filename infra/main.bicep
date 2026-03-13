@@ -1,29 +1,10 @@
 targetScope = 'resourceGroup'
 
+@description('Name of the azd environment.')
+param environmentName string
+
 @description('Deployment location for all resources.')
 param location string = resourceGroup().location
-
-@description('Workload prefix used in resource naming.')
-@minLength(2)
-@maxLength(12)
-param prefix string
-
-@description('Environment name used in resource naming and tagging.')
-@allowed([
-  'dev'
-  'stg'
-  'prod'
-])
-param env string
-
-@description('Container image reference relative to ACR for the agent app.')
-param agentImage string
-
-@description('Container image reference relative to ACR for the web UI app.')
-param webImage string
-
-@description('Allowed origin value for the agent app CORS setting. Use * only for initial bring-up.')
-param allowedOrigin string = '*'
 
 @description('Set true while Azure AI Search index creation is still pending.')
 param mockSearch bool = true
@@ -34,24 +15,7 @@ param searchIndexName string = 'helpdesk-index'
 @description('Blob container used as the knowledge source landing area.')
 param knowledgeContainerName string = 'knowledge'
 
-@description('SKU for Azure Container Registry.')
-@allowed([
-  'Basic'
-  'Standard'
-  'Premium'
-])
-param acrSku string = 'Standard'
-
-@description('SKU for Azure Storage account.')
-@allowed([
-  'Standard_LRS'
-  'Standard_GRS'
-  'Standard_RAGRS'
-  'Standard_ZRS'
-])
-param storageSku string = 'Standard_LRS'
-
-@description('SKU for Azure AI Search.')
+@description('Azure AI Search SKU.')
 @allowed([
   'basic'
   'standard'
@@ -96,39 +60,23 @@ param openAiEmbeddingModelVersion string
 @description('Capacity for the embedding deployment.')
 param openAiEmbeddingCapacity int = 1
 
-@description('CPU cores allocated to the agent app container.')
-param agentCpu int = 1
-
-@description('Memory allocated to the agent app container, in Gi.')
-param agentMemory string = '2Gi'
-
-@description('CPU cores allocated to the web UI container.')
-param webCpu string = '0.5'
-
-@description('Memory allocated to the web UI container, in Gi.')
-param webMemory string = '1Gi'
-
-var uniqueSuffix = toLower(take(uniqueString(subscription().subscriptionId, resourceGroup().id, prefix, env), 6))
-var compactBase = toLower(replace('${prefix}${env}${uniqueSuffix}', '-', ''))
-var hyphenBase = toLower('${prefix}-${env}-${uniqueSuffix}')
+var resourceToken = uniqueString(subscription().id, resourceGroup().id, location, environmentName)
 
 var tags = {
-  Environment: env
-  Project: prefix
-  Owner: 'copilot'
+  Environment: environmentName
 }
 
-var logAnalyticsName = take('log-${hyphenBase}', 63)
-var appInsightsName = take('appi-${hyphenBase}', 63)
-var acrName = take('acr${compactBase}00', 50)
-var storageAccountName = take('st${compactBase}0', 24)
-var searchServiceName = take('srch-${hyphenBase}', 60)
-var openAiAccountName = take('aoai-${hyphenBase}', 64)
-var openAiSubdomain = take(replace('aoai-${hyphenBase}', '--', '-'), 64)
-var managedIdentityName = take('id-${hyphenBase}', 128)
-var containerEnvName = take('cae-${hyphenBase}', 32)
-var agentAppName = take('ca-agent-${hyphenBase}', 32)
-var webAppName = take('ca-web-${hyphenBase}', 32)
+var logAnalyticsName = 'azlog${resourceToken}'
+var appInsightsName = 'azapp${resourceToken}'
+var acrName = 'azacr${resourceToken}'
+var storageAccountName = 'azst${resourceToken}'
+var searchServiceName = 'azsea${resourceToken}'
+var openAiAccountName = 'azai${resourceToken}'
+var openAiSubdomain = 'azai${resourceToken}'
+var managedIdentityName = 'azid${resourceToken}'
+var containerEnvName = 'azcae${resourceToken}'
+var agentAppName = 'azcaa${resourceToken}'
+var webAppName = 'azcaw${resourceToken}'
 
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var storageBlobDataReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
@@ -170,11 +118,21 @@ resource acr 'Microsoft.ContainerRegistry/registries@2023-06-01-preview' = {
   location: location
   tags: tags
   sku: {
-    name: acrSku
+    name: 'Standard'
   }
   properties: {
     adminUserEnabled: false
     publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(acr.id, acrPullRoleDefinitionId, managedIdentity.id)
+  scope: acr
+  properties: {
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: acrPullRoleDefinitionId
   }
 }
 
@@ -183,7 +141,7 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   location: location
   tags: tags
   sku: {
-    name: storageSku
+    name: 'Standard_LRS'
   }
   kind: 'StorageV2'
   properties: {
@@ -243,15 +201,29 @@ resource search 'Microsoft.Search/searchServices@2025-02-01-preview' = {
   }
 }
 
+resource searchToStorageAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storage.id, storageBlobDataReaderRoleDefinitionId, search.id)
+  scope: storage
+  properties: {
+    principalId: search.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: storageBlobDataReaderRoleDefinitionId
+  }
+}
+
 resource openAi 'Microsoft.CognitiveServices/accounts@2025-06-01' = {
   name: openAiAccountName
   location: location
-  kind: 'OpenAI'
+  kind: 'AIServices'
+  identity: {
+    type: 'SystemAssigned'
+  }
   tags: tags
   sku: {
     name: openAiSku
   }
   properties: {
+    allowProjectManagement: true
     customSubDomainName: openAiSubdomain
     disableLocalAuth: true
     publicNetworkAccess: 'Enabled'
@@ -263,7 +235,7 @@ resource realtimeDeployment 'Microsoft.CognitiveServices/accounts/deployments@20
   parent: openAi
   name: openAiRealtimeDeploymentName
   sku: {
-    name: 'Standard'
+    name: 'GlobalStandard'
     capacity: openAiRealtimeCapacity
   }
   properties: {
@@ -278,8 +250,11 @@ resource realtimeDeployment 'Microsoft.CognitiveServices/accounts/deployments@20
 resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-06-01' = {
   parent: openAi
   name: openAiEmbeddingDeploymentName
+  dependsOn: [
+    realtimeDeployment
+  ]
   sku: {
-    name: 'Standard'
+    name: 'GlobalStandard'
     capacity: openAiEmbeddingCapacity
   }
   properties: {
@@ -288,6 +263,26 @@ resource embeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
       name: openAiEmbeddingModelName
       version: openAiEmbeddingModelVersion
     }
+  }
+}
+
+resource openAiUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(openAi.id, openAiUserRoleDefinitionId, managedIdentity.id)
+  scope: openAi
+  properties: {
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: openAiUserRoleDefinitionId
+  }
+}
+
+resource searchReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(search.id, searchIndexDataReaderRoleDefinitionId, managedIdentity.id)
+  scope: search
+  properties: {
+    principalId: managedIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: searchIndexDataReaderRoleDefinitionId
   }
 }
 
@@ -310,7 +305,9 @@ resource containerEnv 'Microsoft.App/managedEnvironments@2024-10-02-preview' = {
 resource agentApp 'Microsoft.App/containerApps@2025-01-01' = {
   name: agentAppName
   location: location
-  tags: tags
+  tags: union(tags, {
+    'azd-service-name': 'agent-app'
+  })
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -323,6 +320,18 @@ resource agentApp 'Microsoft.App/containerApps@2025-01-01' = {
       activeRevisionsMode: 'Single'
       ingress: {
         allowInsecure: false
+        corsPolicy: {
+          allowCredentials: false
+          allowedOrigins: [
+            '*'
+          ]
+          allowedMethods: [
+            '*'
+          ]
+          allowedHeaders: [
+            '*'
+          ]
+        }
         external: true
         targetPort: 8080
         traffic: [
@@ -343,8 +352,8 @@ resource agentApp 'Microsoft.App/containerApps@2025-01-01' = {
     template: {
       containers: [
         {
-          name: 'agent-app'
-          image: '${acr.properties.loginServer}/${agentImage}'
+          name: 'agentapp'
+          image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
           env: [
             {
               name: 'PORT'
@@ -352,7 +361,7 @@ resource agentApp 'Microsoft.App/containerApps@2025-01-01' = {
             }
             {
               name: 'ALLOWED_ORIGIN'
-              value: allowedOrigin
+              value: '*'
             }
             {
               name: 'LOG_LEVEL'
@@ -361,6 +370,10 @@ resource agentApp 'Microsoft.App/containerApps@2025-01-01' = {
             {
               name: 'MOCK_SEARCH'
               value: mockSearch ? 'true' : 'false'
+            }
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: managedIdentity.properties.clientId
             }
             {
               name: 'AZURE_OPENAI_ENDPOINT'
@@ -407,29 +420,9 @@ resource agentApp 'Microsoft.App/containerApps@2025-01-01' = {
               value: '5'
             }
           ]
-          probes: [
-            {
-              type: 'Liveness'
-              httpGet: {
-                path: '/health'
-                port: 8080
-              }
-              initialDelaySeconds: 10
-              periodSeconds: 15
-            }
-            {
-              type: 'Readiness'
-              httpGet: {
-                path: '/health'
-                port: 8080
-              }
-              initialDelaySeconds: 5
-              periodSeconds: 10
-            }
-          ]
           resources: {
-            cpu: agentCpu
-            memory: agentMemory
+            cpu: json('1')
+            memory: '2Gi'
           }
         }
       ]
@@ -439,12 +432,19 @@ resource agentApp 'Microsoft.App/containerApps@2025-01-01' = {
       }
     }
   }
+  dependsOn: [
+    acrPullAssignment
+    openAiUserAssignment
+    searchReaderAssignment
+  ]
 }
 
 resource webApp 'Microsoft.App/containerApps@2025-01-01' = {
   name: webAppName
   location: location
-  tags: tags
+  tags: union(tags, {
+    'azd-service-name': 'web-ui'
+  })
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
@@ -457,6 +457,18 @@ resource webApp 'Microsoft.App/containerApps@2025-01-01' = {
       activeRevisionsMode: 'Single'
       ingress: {
         allowInsecure: false
+        corsPolicy: {
+          allowCredentials: false
+          allowedOrigins: [
+            '*'
+          ]
+          allowedMethods: [
+            '*'
+          ]
+          allowedHeaders: [
+            '*'
+          ]
+        }
         external: true
         targetPort: 80
         traffic: [
@@ -477,31 +489,17 @@ resource webApp 'Microsoft.App/containerApps@2025-01-01' = {
     template: {
       containers: [
         {
-          name: 'web-ui'
-          image: '${acr.properties.loginServer}/${webImage}'
-          probes: [
+          name: 'webui'
+          image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          env: [
             {
-              type: 'Liveness'
-              httpGet: {
-                path: '/'
-                port: 80
-              }
-              initialDelaySeconds: 10
-              periodSeconds: 15
-            }
-            {
-              type: 'Readiness'
-              httpGet: {
-                path: '/'
-                port: 80
-              }
-              initialDelaySeconds: 5
-              periodSeconds: 10
+              name: 'VITE_AGENT_API_BASE_URL'
+              value: 'https://${agentApp.properties.configuration.ingress.fqdn}'
             }
           ]
           resources: {
-            cpu: json(webCpu)
-            memory: webMemory
+            cpu: json('0.5')
+            memory: '1Gi'
           }
         }
       ]
@@ -511,53 +509,17 @@ resource webApp 'Microsoft.App/containerApps@2025-01-01' = {
       }
     }
   }
+  dependsOn: [
+    acrPullAssignment
+  ]
 }
 
-resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(acr.id, acrPullRoleDefinitionId, managedIdentity.id)
-  scope: acr
-  properties: {
-    principalId: managedIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: acrPullRoleDefinitionId
-  }
-}
-
-resource openAiUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(openAi.id, openAiUserRoleDefinitionId, managedIdentity.id)
-  scope: openAi
-  properties: {
-    principalId: managedIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: openAiUserRoleDefinitionId
-  }
-}
-
-resource searchReaderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(search.id, searchIndexDataReaderRoleDefinitionId, managedIdentity.id)
-  scope: search
-  properties: {
-    principalId: managedIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: searchIndexDataReaderRoleDefinitionId
-  }
-}
-
-resource searchToStorageAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storage.id, storageBlobDataReaderRoleDefinitionId, search.id)
-  scope: storage
-  properties: {
-    principalId: search.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: storageBlobDataReaderRoleDefinitionId
-  }
-}
-
-output acrLoginServer string = acr.properties.loginServer
-output agentAppUrl string = 'https://${agentApp.properties.configuration.ingress.fqdn}'
-output webAppUrl string = 'https://${webApp.properties.configuration.ingress.fqdn}'
-output openAiEndpoint string = openAi.properties.endpoint
-output searchEndpoint string = 'https://${search.name}.search.windows.net'
-output knowledgeStorageAccountName string = storage.name
-output knowledgeContainerResourceId string = knowledgeContainer.id
-output managedIdentityResourceId string = managedIdentity.id
+output RESOURCE_GROUP_ID string = resourceGroup().id
+output AZURE_CONTAINER_REGISTRY_ENDPOINT string = acr.properties.loginServer
+output AZURE_CONTAINER_REGISTRY_NAME string = acr.name
+output AGENT_APP_URL string = 'https://${agentApp.properties.configuration.ingress.fqdn}'
+output WEB_UI_URL string = 'https://${webApp.properties.configuration.ingress.fqdn}'
+output AZURE_OPENAI_ENDPOINT string = openAi.properties.endpoint
+output AZURE_SEARCH_ENDPOINT string = 'https://${search.name}.search.windows.net'
+output AZURE_STORAGE_ACCOUNT_NAME string = storage.name
+output AZURE_KNOWLEDGE_CONTAINER_NAME string = knowledgeContainerName

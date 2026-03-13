@@ -1,0 +1,3 @@
+window.__APP_CONFIG__ = {
+  VITE_AGENT_API_BASE_URL: "$VITE_AGENT_API_BASE_URL"
+};

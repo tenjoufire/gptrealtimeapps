@@ -5,7 +5,7 @@
 - Azure Container Registry
 - Azure Blob Storage と knowledge コンテナー
 - Azure AI Search
-- Azure OpenAI
+- Azure AI Foundry resource
 - Log Analytics Workspace
 - Application Insights
 - User Assigned Managed Identity
@@ -15,44 +15,27 @@
 
 ## 先に埋める値
 
-main.bicepparam で次の値を必ず更新してください。
+main.bicepparam で次の値を必要に応じて更新してください。
 
+- openAiRealtimeModelName
 - openAiRealtimeModelVersion
 - openAiEmbeddingModelVersion
-- agentImage
-- webImage
 
 OpenAI の deployment 名は既定値で次を使っています。
 
 - gpt-realtime-1.5
 - text-embedding-3-large
 
-ただし model version はリージョンと提供状況に依存するため、プレースホルダーのままではデプロイできません。
+既定値では realtime に `gpt-realtime` / `2025-08-28`、embedding に `text-embedding-3-large` / `1` を使っています。`gpt-realtime-1.5-2026-02-23` は docs 上の利用可能モデルですが、このテンプレートを `eastus2` へ ARM 検証した時点では `DeploymentModelNotSupported` で失敗しました。
 
 ## デプロイ手順
 
-1. ACR と Agent App を先に使える状態にするため、まず agent イメージを build します。
-2. Bicep を実行してインフラを作成します。
-3. agentAppUrl の出力を使って web-ui を build し直します。
-4. webImage を更新してもう一度 Bicep を実行します。
+1. `azd env new <environment-name>` を実行します。
+2. `azd env set AZURE_LOCATION eastus2` を実行します。
+3. 必要なら main.parameters.json または main.bicepparam の OpenAI model 設定を更新します。
+4. `azd up` を実行します。
 
-## 例: ACR build
-
-最初の 1 回目は agent イメージだけでも構いません。
-
-```bash
-az acr build -r <acr-name> -t agent-app:latest ./agent-app
-```
-
-web-ui は Vite の build 時に API URL を埋め込む必要があります。agentAppUrl がわかった後で build してください。
-
-```bash
-az acr build \
-  -r <acr-name> \
-  -t web-ui:latest \
-  --build-arg VITE_AGENT_API_BASE_URL=https://<agent-app-fqdn> \
-  ./web-ui
-```
+`azd` が ACR remote build と Container Apps 更新までまとめて実行します。
 
 ## Bicep 実行例
 
