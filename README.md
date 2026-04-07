@@ -5,6 +5,112 @@
 - `web-ui`: React + Vite のブラウザアプリ。WebRTC で GPT Realtime 1.5 と音声セッションを張ります。
 - `agent-app`: Node.js + Express のバックエンド。SDP を proxy し、Realtime セッションを observer 接続で監視して Azure AI Search の tool call を実行します。
 
+## Azure アーキテクチャ構成図
+
+`azd up` でデプロイされる Azure リソースと通信関係を示します。
+
+```mermaid
+graph TB
+    subgraph User["👤 ユーザー (ブラウザ)"]
+        Browser["ブラウザ<br/>WebRTC 対応"]
+    end
+
+    subgraph Azure["Azure Resource Group"]
+        subgraph CAE["Container Apps Environment"]
+            WebUI["web-ui<br/>(Container App)<br/>React + Vite / Nginx<br/>ポート 80"]
+            AgentApp["agent-app<br/>(Container App)<br/>Node.js + Express<br/>ポート 8080"]
+        end
+
+        ACR["Azure Container Registry<br/>(Standard)"]
+
+        subgraph AOAI["Azure AI Services"]
+            RealtimeModel["GPT Realtime 1.5<br/>(GlobalStandard)"]
+            EmbeddingModel["text-embedding-3-large<br/>(GlobalStandard)"]
+        end
+
+        Search["Azure AI Search<br/>(Basic / Semantic)"]
+        Storage["Azure Storage Account<br/>Blob: knowledge コンテナ"]
+
+        ManagedID["User Assigned<br/>Managed Identity"]
+
+        subgraph Monitor["監視"]
+            LogAnalytics["Log Analytics<br/>Workspace"]
+            AppInsights["Application Insights"]
+        end
+    end
+
+    %% ユーザー → Web UI (静的サイト配信)
+    Browser -- "HTTPS<br/>静的サイト取得" --> WebUI
+
+    %% ブラウザ → agent-app (SDP Offer)
+    Browser -- "HTTPS POST<br/>/api/realtime/connect<br/>(SDP Offer)" --> AgentApp
+
+    %% ブラウザ ↔ Azure OpenAI (WebRTC 音声)
+    Browser <-- "WebRTC<br/>音声ストリーム" --> RealtimeModel
+
+    %% agent-app → Azure OpenAI (SDP Proxy + Observer)
+    AgentApp -- "REST API<br/>client_secrets /<br/>realtime/calls<br/>(SDP Proxy)" --> RealtimeModel
+    AgentApp -- "WebSocket<br/>Observer 接続<br/>(tool call 監視)" --> RealtimeModel
+    AgentApp -- "REST API<br/>Embeddings" --> EmbeddingModel
+
+    %% agent-app → AI Search
+    AgentApp -- "REST API<br/>ベクトル + セマンティック検索" --> Search
+
+    %% AI Search → Storage (インデクサー)
+    Search -- "Blob Data Reader<br/>(インデクサーソース)" --> Storage
+
+    %% ACR → Container Apps (イメージ Pull)
+    WebUI -. "イメージ Pull" .-> ACR
+    AgentApp -. "イメージ Pull" .-> ACR
+
+    %% Managed Identity RBAC
+    ManagedID -. "AcrPull" .-> ACR
+    ManagedID -. "OpenAI User" .-> AOAI
+    ManagedID -. "Search Index<br/>Data Reader" .-> Search
+
+    %% 監視
+    CAE -. "ログ送信" .-> LogAnalytics
+    AppInsights -. "診断データ" .-> LogAnalytics
+
+    style Azure fill:#e8f4fd,stroke:#0078d4
+    style CAE fill:#fff3e0,stroke:#ff8f00
+    style AOAI fill:#e8f5e9,stroke:#388e3c
+    style Monitor fill:#f3e5f5,stroke:#7b1fa2
+    style User fill:#fce4ec,stroke:#c62828
+```
+
+### リソース一覧と役割
+
+| リソース | 種類 | 役割 |
+|---|---|---|
+| **web-ui** | Container App | React SPA をブラウザに配信。Nginx がランタイム構成を注入 |
+| **agent-app** | Container App | SDP プロキシ、Observer WebSocket による tool call 実行、RAG 検索 |
+| **Azure AI Services** | Cognitive Services | GPT Realtime 1.5 (音声) と text-embedding-3-large (埋め込み) をホスト |
+| **Azure AI Search** | Search Service | ナレッジベースのベクトル＋セマンティック検索を提供 |
+| **Azure Storage** | Storage Account | `knowledge` Blob コンテナにドキュメントを格納 (AI Search のデータソース) |
+| **Azure Container Registry** | Container Registry | agent-app / web-ui の Docker イメージを格納 |
+| **User Assigned Managed Identity** | Managed Identity | Container Apps が各サービスにアクセスするための RBAC ID |
+| **Log Analytics / App Insights** | 監視 | ログ収集と診断 |
+
+### 通信フローの概要
+
+1. **ブラウザ → web-ui**: HTTPS で React SPA を取得
+2. **ブラウザ → agent-app**: `/api/realtime/connect` へ SDP Offer を POST
+3. **agent-app → Azure OpenAI**: `client_secrets` → `realtime/calls` API で SDP を中継し、Answer SDP をブラウザに返却
+4. **ブラウザ ↔ Azure OpenAI**: WebRTC で音声をリアルタイム送受信
+5. **agent-app → Azure OpenAI**: Observer WebSocket (`wss://…/realtime?call_id=…`) でセッションを監視
+6. **モデルが tool call を発行** → agent-app が Azure AI Search を検索 → `function_call_output` を返却
+7. **Azure AI Search → Storage**: インデクサーが Blob からドキュメントを読み取り
+
+### RBAC (ロール割り当て)
+
+| プリンシパル | スコープ | ロール |
+|---|---|---|
+| User Assigned Managed Identity | Azure Container Registry | AcrPull |
+| User Assigned Managed Identity | Azure AI Services | Cognitive Services OpenAI User |
+| User Assigned Managed Identity | Azure AI Search | Search Index Data Reader |
+| Azure AI Search (System Identity) | Azure Storage | Storage Blob Data Reader |
+
 ## ディレクトリ構成
 
 ```text
