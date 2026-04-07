@@ -61,7 +61,8 @@ export async function executeTool(name: string, rawArguments: string): Promise<T
       ok: true,
       payload: {
         query: parsed.query,
-        results: results.map((item) => ({
+        answer: results.answer,
+        results: results.results.map((item) => ({
           title: item.title,
           content: item.content,
           source: item.source,

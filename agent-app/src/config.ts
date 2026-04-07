@@ -9,14 +9,13 @@ export interface AppConfig {
   azureOpenAIRealtimeDeployment: string;
   azureOpenAIRealtimeVoice: string;
   azureOpenAIInstructions: string;
-  azureOpenAIEmbeddingDeployment?: string;
   mockSearch: boolean;
   azureSearchEndpoint?: string;
-  azureSearchIndex?: string;
+  azureSearchKnowledgeBase?: string;
+  azureSearchKnowledgeSource?: string;
   azureSearchApiVersion: string;
-  azureSearchVectorField: string;
-  azureSearchSemanticConfiguration?: string;
   azureSearchTopK: number;
+  azureSearchRerankerThreshold?: number;
 }
 
 function getRequired(name: string): string {
@@ -54,6 +53,18 @@ function normalizeEndpoint(raw: string): string {
   return raw.replace(/\/$/, "");
 }
 
+function getOptional(name: string): string | undefined {
+  const value = process.env[name];
+  return value && value.length > 0 ? value : undefined;
+}
+
+function getOptionalEndpoint(name: string): string | undefined {
+  const value = getOptional(name);
+  return value ? normalizeEndpoint(value) : undefined;
+}
+
+const mockSearch = getBoolean("MOCK_SEARCH", false);
+
 export const config: AppConfig = {
   port: getNumber("PORT", 8080),
   allowedOrigin: process.env.ALLOWED_ORIGIN ?? "http://localhost:5173",
@@ -65,12 +76,13 @@ export const config: AppConfig = {
   azureOpenAIInstructions:
     process.env.AZURE_OPENAI_INSTRUCTIONS ??
     "あなたは社内ヘルプデスクの音声アシスタントです。回答は日本語で、必要に応じてナレッジベースを検索してください。",
-  azureOpenAIEmbeddingDeployment: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-  mockSearch: getBoolean("MOCK_SEARCH", false),
-  azureSearchEndpoint: process.env.AZURE_SEARCH_ENDPOINT,
-  azureSearchIndex: process.env.AZURE_SEARCH_INDEX,
-  azureSearchApiVersion: process.env.AZURE_SEARCH_API_VERSION ?? "2024-07-01",
-  azureSearchVectorField: process.env.AZURE_SEARCH_VECTOR_FIELD ?? "contentVector",
-  azureSearchSemanticConfiguration: process.env.AZURE_SEARCH_SEMANTIC_CONFIGURATION,
-  azureSearchTopK: getNumber("AZURE_SEARCH_TOP_K", 5)
+  mockSearch,
+  azureSearchEndpoint: getOptionalEndpoint("AZURE_SEARCH_ENDPOINT"),
+  azureSearchKnowledgeBase: getOptional("AZURE_SEARCH_KNOWLEDGE_BASE"),
+  azureSearchKnowledgeSource: getOptional("AZURE_SEARCH_KNOWLEDGE_SOURCE"),
+  azureSearchApiVersion: process.env.AZURE_SEARCH_API_VERSION ?? "2025-11-01-preview",
+  azureSearchTopK: getNumber("AZURE_SEARCH_TOP_K", 5),
+  azureSearchRerankerThreshold: getOptional("AZURE_SEARCH_RERANKER_THRESHOLD")
+    ? getNumber("AZURE_SEARCH_RERANKER_THRESHOLD", 0)
+    : undefined
 };

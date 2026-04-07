@@ -9,13 +9,22 @@
       "value": "${AZURE_LOCATION}"
     },
     "mockSearch": {
-      "value": true
-    },
-    "searchIndexName": {
-      "value": "helpdesk-index"
+      "value": false
     },
     "knowledgeContainerName": {
       "value": "knowledge"
+    },
+    "foundryProjectName": {
+      "value": "voice-helpdesk"
+    },
+    "foundrySearchConnectionName": {
+      "value": "helpdesk-search"
+    },
+    "knowledgeSourceName": {
+      "value": "helpdesk-blob-ks"
+    },
+    "knowledgeBaseName": {
+      "value": "helpdesk-kb"
     },
     "searchSku": {
       "value": "basic"
@@ -51,6 +60,18 @@
       "value": "1"
     },
     "openAiEmbeddingCapacity": {
+      "value": 1
+    },
+    "openAiChatDeploymentName": {
+      "value": "gpt-4.1-mini"
+    },
+    "openAiChatModelName": {
+      "value": "gpt-4.1-mini"
+    },
+    "openAiChatModelVersion": {
+      "value": "2025-04-14"
+    },
+    "openAiChatCapacity": {
       "value": 1
     }
   }

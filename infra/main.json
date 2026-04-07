@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.41.2.15936",
-      "templateHash": "2167330164035284047"
+      "templateHash": "8652024063138568991"
     }
   },
   "parameters": {
@@ -26,14 +26,7 @@
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Set true while Azure AI Search index creation is still pending."
-      }
-    },
-    "searchIndexName": {
-      "type": "string",
-      "defaultValue": "helpdesk-index",
-      "metadata": {
-        "description": "Azure AI Search index name consumed by the agent app."
+        "description": "Set true to return mock knowledge base responses from the agent app."
       }
     },
     "knowledgeContainerName": {
@@ -41,6 +34,34 @@
       "defaultValue": "knowledge",
       "metadata": {
         "description": "Blob container used as the knowledge source landing area."
+      }
+    },
+    "foundryProjectName": {
+      "type": "string",
+      "defaultValue": "voice-helpdesk",
+      "metadata": {
+        "description": "Azure AI Foundry project name."
+      }
+    },
+    "foundrySearchConnectionName": {
+      "type": "string",
+      "defaultValue": "helpdesk-search",
+      "metadata": {
+        "description": "Azure AI Foundry connection name for Azure AI Search."
+      }
+    },
+    "knowledgeSourceName": {
+      "type": "string",
+      "defaultValue": "helpdesk-blob-ks",
+      "metadata": {
+        "description": "Knowledge source name created in Azure AI Search."
+      }
+    },
+    "knowledgeBaseName": {
+      "type": "string",
+      "defaultValue": "helpdesk-kb",
+      "metadata": {
+        "description": "Knowledge base name created in Azure AI Search."
       }
     },
     "searchSku": {
@@ -131,10 +152,38 @@
       "metadata": {
         "description": "Capacity for the embedding deployment."
       }
+    },
+    "openAiChatDeploymentName": {
+      "type": "string",
+      "defaultValue": "gpt-4.1-mini",
+      "metadata": {
+        "description": "Chat deployment used by Azure AI Search knowledge source ingestion and answer synthesis."
+      }
+    },
+    "openAiChatModelName": {
+      "type": "string",
+      "metadata": {
+        "description": "Chat model name for the Azure OpenAI deployment used by the knowledge base."
+      }
+    },
+    "openAiChatModelVersion": {
+      "type": "string",
+      "metadata": {
+        "description": "Chat model version for the Azure OpenAI deployment used by the knowledge base."
+      }
+    },
+    "openAiChatCapacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Capacity for the chat deployment."
+      }
     }
   },
   "variables": {
+    "$fxv#0": "#!/usr/bin/env bash\n\nset -euo pipefail\n\nsearch_endpoint=\"${SEARCH_ENDPOINT%/}\"\nopenai_endpoint=\"${OPENAI_ENDPOINT%/}\"\nknowledge_source_url=\"${search_endpoint}/knowledgesources/${KNOWLEDGE_SOURCE_NAME}?api-version=${SEARCH_API_VERSION}\"\nknowledge_base_url=\"${search_endpoint}/knowledgebases/${KNOWLEDGE_BASE_NAME}?api-version=${SEARCH_API_VERSION}\"\nstorage_connection_string=\"ResourceId=${STORAGE_RESOURCE_ID};\"\n\naz login --identity --username \"${AZURE_CLIENT_ID}\" --allow-no-subscriptions >/dev/null\n\nput_with_retry() {\n  local url=\"$1\"\n  local body=\"$2\"\n  local attempt=1\n  local max_attempts=12\n\n  while true; do\n    if output=$(az rest \\\n      --method put \\\n      --url \"$url\" \\\n      --resource \"https://search.azure.com\" \\\n      --headers \"Content-Type=application/json\" \\\n      --body \"$body\" 2>&1); then\n      echo \"$output\"\n      return 0\n    fi\n\n    if [[ \"$attempt\" -ge \"$max_attempts\" ]]; then\n      echo \"$output\" >&2\n      return 1\n    fi\n\n    echo \"Retrying search data-plane request after RBAC propagation delay (attempt ${attempt}/${max_attempts})...\" >&2\n    attempt=$((attempt + 1))\n    sleep 15\n  done\n}\n\nknowledge_source_body=$(cat <<EOF\n{\n  \"name\": \"${KNOWLEDGE_SOURCE_NAME}\",\n  \"kind\": \"azureBlob\",\n  \"description\": \"Blob-backed knowledge source for the GPT Realtime voice help desk.\",\n  \"azureBlobParameters\": {\n    \"connectionString\": \"${storage_connection_string}\",\n    \"containerName\": \"${STORAGE_CONTAINER_NAME}\",\n    \"folderPath\": null,\n    \"isADLSGen2\": false,\n    \"ingestionParameters\": {\n      \"identity\": null,\n      \"disableImageVerbalization\": false,\n      \"chatCompletionModel\": {\n        \"kind\": \"azureOpenAI\",\n        \"azureOpenAIParameters\": {\n          \"resourceUri\": \"${openai_endpoint}\",\n          \"deploymentId\": \"${OPENAI_CHAT_DEPLOYMENT_NAME}\",\n          \"modelName\": \"${OPENAI_CHAT_MODEL_NAME}\"\n        }\n      },\n      \"embeddingModel\": {\n        \"kind\": \"azureOpenAI\",\n        \"azureOpenAIParameters\": {\n          \"resourceUri\": \"${openai_endpoint}\",\n          \"deploymentId\": \"${OPENAI_EMBEDDING_DEPLOYMENT_NAME}\",\n          \"modelName\": \"${OPENAI_EMBEDDING_MODEL_NAME}\"\n        }\n      },\n      \"contentExtractionMode\": \"minimal\",\n      \"ingestionSchedule\": null,\n      \"ingestionPermissionOptions\": []\n    }\n  }\n}\nEOF\n)\n\nknowledge_base_body=$(cat <<EOF\n{\n  \"name\": \"${KNOWLEDGE_BASE_NAME}\",\n  \"description\": \"Knowledge base for the GPT Realtime voice help desk.\",\n  \"retrievalInstructions\": \"Use this knowledge source to answer internal help desk questions. If the content is insufficient, clearly say that the answer is not present in the knowledge base.\",\n  \"answerInstructions\": \"Provide a concise grounded answer in Japanese and keep references available for downstream citation handling.\",\n  \"outputMode\": \"answerSynthesis\",\n  \"knowledgeSources\": [\n    {\n      \"name\": \"${KNOWLEDGE_SOURCE_NAME}\"\n    }\n  ],\n  \"models\": [\n    {\n      \"kind\": \"azureOpenAI\",\n      \"azureOpenAIParameters\": {\n        \"resourceUri\": \"${openai_endpoint}\",\n        \"deploymentId\": \"${OPENAI_CHAT_DEPLOYMENT_NAME}\",\n        \"modelName\": \"${OPENAI_CHAT_MODEL_NAME}\"\n      }\n    }\n  ],\n  \"retrievalReasoningEffort\": {\n    \"kind\": \"low\"\n  }\n}\nEOF\n)\n\necho \"Upserting Azure AI Search knowledge source ${KNOWLEDGE_SOURCE_NAME}...\"\nput_with_retry \"$knowledge_source_url\" \"$knowledge_source_body\" >/dev/null\n\necho \"Upserting Azure AI Search knowledge base ${KNOWLEDGE_BASE_NAME}...\"\nput_with_retry \"$knowledge_base_url\" \"$knowledge_base_body\" >/dev/null\n\necho \"Knowledge source and knowledge base provisioning completed.\"",
     "resourceToken": "[uniqueString(subscription().id, resourceGroup().id, parameters('location'), parameters('environmentName'))]",
+    "searchKnowledgeApiVersion": "2025-11-01-preview",
     "tags": {
       "Environment": "[parameters('environmentName')]"
     },
@@ -146,12 +195,15 @@
     "openAiAccountName": "[format('azai{0}', variables('resourceToken'))]",
     "openAiSubdomain": "[format('azai{0}', variables('resourceToken'))]",
     "managedIdentityName": "[format('azid{0}', variables('resourceToken'))]",
+    "knowledgeProvisionerIdentityName": "[format('azidp{0}', variables('resourceToken'))]",
     "containerEnvName": "[format('azcae{0}', variables('resourceToken'))]",
     "agentAppName": "[format('azcaa{0}', variables('resourceToken'))]",
     "webAppName": "[format('azcaw{0}', variables('resourceToken'))]",
+    "knowledgeProvisioningScriptName": "[format('azdks{0}', variables('resourceToken'))]",
     "acrPullRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
     "storageBlobDataReaderRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')]",
     "searchIndexDataReaderRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '1407120a-92aa-4202-b7e9-c0e197c71c8f')]",
+    "searchServiceContributorRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7ca78c08-252a-4471-8644-bb5ff32d4ba0')]",
     "openAiUserRoleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')]"
   },
   "resources": [
@@ -233,7 +285,7 @@
       "properties": {
         "accessTier": "Hot",
         "allowBlobPublicAccess": false,
-        "allowSharedKeyAccess": true,
+        "allowSharedKeyAccess": false,
         "minimumTlsVersion": "TLS1_2",
         "supportsHttpsTrafficOnly": true
       }
@@ -285,7 +337,7 @@
             "aadAuthFailureMode": "http401WithBearerChallenge"
           }
         },
-        "disableLocalAuth": false,
+        "disableLocalAuth": true,
         "hostingMode": "default",
         "partitionCount": "[parameters('searchPartitionCount')]",
         "publicNetworkAccess": "Enabled",
@@ -369,6 +421,43 @@
       ]
     },
     {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}', variables('openAiAccountName'), parameters('openAiChatDeploymentName'))]",
+      "sku": {
+        "name": "GlobalStandard",
+        "capacity": "[parameters('openAiChatCapacity')]"
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "[parameters('openAiChatModelName')]",
+          "version": "[parameters('openAiChatModelVersion')]"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('openAiAccountName'), parameters('openAiEmbeddingDeploymentName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/projects",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}', variables('openAiAccountName'), parameters('foundryProjectName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "displayName": "GPT Realtime Help Desk",
+        "description": "Foundry project for the GPT Realtime voice help desk and its Azure AI Search knowledge base."
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName'))]"
+      ]
+    },
+    {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName'))]",
@@ -386,6 +475,21 @@
     {
       "type": "Microsoft.Authorization/roleAssignments",
       "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName'))]",
+      "name": "[guid(resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName')), variables('openAiUserRoleDefinitionId'), resourceId('Microsoft.Search/searchServices', variables('searchServiceName')))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Search/searchServices', variables('searchServiceName')), '2025-02-01-preview', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[variables('openAiUserRoleDefinitionId')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName'))]",
+        "[resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
       "scope": "[resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))]",
       "name": "[guid(resourceId('Microsoft.Search/searchServices', variables('searchServiceName')), variables('searchIndexDataReaderRoleDefinitionId'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName')))]",
       "properties": {
@@ -396,6 +500,148 @@
       "dependsOn": [
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]",
         "[resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))]",
+      "name": "[guid(resourceId('Microsoft.Search/searchServices', variables('searchServiceName')), variables('searchIndexDataReaderRoleDefinitionId'), resourceId('Microsoft.CognitiveServices/accounts/projects', variables('openAiAccountName'), parameters('foundryProjectName')))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.CognitiveServices/accounts/projects', variables('openAiAccountName'), parameters('foundryProjectName')), '2025-06-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[variables('searchIndexDataReaderRoleDefinitionId')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('openAiAccountName'), parameters('foundryProjectName'))]",
+        "[resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('knowledgeProvisionerIdentityName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]"
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))]",
+      "name": "[guid(resourceId('Microsoft.Search/searchServices', variables('searchServiceName')), variables('searchServiceContributorRoleDefinitionId'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('knowledgeProvisionerIdentityName')))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('knowledgeProvisionerIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[variables('searchServiceContributorRoleDefinitionId')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('knowledgeProvisionerIdentityName'))]",
+        "[resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/projects/connections",
+      "apiVersion": "2025-06-01",
+      "name": "[format('{0}/{1}/{2}', variables('openAiAccountName'), parameters('foundryProjectName'), parameters('foundrySearchConnectionName'))]",
+      "properties": {
+        "category": "CognitiveSearch",
+        "target": "[format('https://{0}.search.windows.net', variables('searchServiceName'))]",
+        "authType": "AAD",
+        "isSharedToAll": true,
+        "useWorkspaceManagedIdentity": true
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('openAiAccountName'), parameters('foundryProjectName'))]",
+        "[extensionResourceId(resourceId('Microsoft.Search/searchServices', variables('searchServiceName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Search/searchServices', variables('searchServiceName')), variables('searchIndexDataReaderRoleDefinitionId'), resourceId('Microsoft.CognitiveServices/accounts/projects', variables('openAiAccountName'), parameters('foundryProjectName'))))]",
+        "[resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "[variables('knowledgeProvisioningScriptName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('tags')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('knowledgeProvisionerIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "azCliVersion": "2.64.0",
+        "cleanupPreference": "OnSuccess",
+        "containerSettings": {
+          "containerGroupName": "[format('azdks-{0}', variables('resourceToken'))]"
+        },
+        "environmentVariables": [
+          {
+            "name": "AZURE_CLIENT_ID",
+            "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('knowledgeProvisionerIdentityName')), '2023-01-31').clientId]"
+          },
+          {
+            "name": "SEARCH_ENDPOINT",
+            "value": "[format('https://{0}.search.windows.net', variables('searchServiceName'))]"
+          },
+          {
+            "name": "SEARCH_API_VERSION",
+            "value": "[variables('searchKnowledgeApiVersion')]"
+          },
+          {
+            "name": "KNOWLEDGE_SOURCE_NAME",
+            "value": "[parameters('knowledgeSourceName')]"
+          },
+          {
+            "name": "KNOWLEDGE_BASE_NAME",
+            "value": "[parameters('knowledgeBaseName')]"
+          },
+          {
+            "name": "STORAGE_RESOURCE_ID",
+            "value": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+          },
+          {
+            "name": "STORAGE_CONTAINER_NAME",
+            "value": "[parameters('knowledgeContainerName')]"
+          },
+          {
+            "name": "OPENAI_ENDPOINT",
+            "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName')), '2025-06-01').endpoint]"
+          },
+          {
+            "name": "OPENAI_CHAT_DEPLOYMENT_NAME",
+            "value": "[parameters('openAiChatDeploymentName')]"
+          },
+          {
+            "name": "OPENAI_CHAT_MODEL_NAME",
+            "value": "[parameters('openAiChatModelName')]"
+          },
+          {
+            "name": "OPENAI_EMBEDDING_DEPLOYMENT_NAME",
+            "value": "[parameters('openAiEmbeddingDeploymentName')]"
+          },
+          {
+            "name": "OPENAI_EMBEDDING_MODEL_NAME",
+            "value": "[parameters('openAiEmbeddingModelName')]"
+          }
+        ],
+        "forceUpdateTag": "[uniqueString(parameters('knowledgeSourceName'), parameters('knowledgeBaseName'), parameters('openAiChatDeploymentName'), parameters('openAiEmbeddingDeploymentName'), parameters('knowledgeContainerName'), variables('searchKnowledgeApiVersion'))]",
+        "retentionInterval": "P1D",
+        "scriptContent": "[variables('$fxv#0')]",
+        "timeout": "PT30M"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('openAiAccountName'), parameters('openAiChatDeploymentName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', variables('openAiAccountName'), parameters('openAiEmbeddingDeploymentName'))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/projects/connections', variables('openAiAccountName'), parameters('foundryProjectName'), parameters('foundrySearchConnectionName'))]",
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', variables('storageAccountName'), 'default', parameters('knowledgeContainerName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('knowledgeProvisionerIdentityName'))]",
+        "[extensionResourceId(resourceId('Microsoft.Search/searchServices', variables('searchServiceName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Search/searchServices', variables('searchServiceName')), variables('searchServiceContributorRoleDefinitionId'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('knowledgeProvisionerIdentityName'))))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName'))]",
+        "[resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))]",
+        "[extensionResourceId(resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName')), variables('openAiUserRoleDefinitionId'), resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))))]",
+        "[extensionResourceId(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), variables('storageBlobDataReaderRoleDefinitionId'), resourceId('Microsoft.Search/searchServices', variables('searchServiceName'))))]",
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
       ]
     },
     {
@@ -508,32 +754,28 @@
                   "value": "あなたは社内ヘルプデスクの音声アシスタントです。回答は日本語で、必要に応じてナレッジベースを検索してください。"
                 },
                 {
-                  "name": "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
-                  "value": "[parameters('openAiEmbeddingDeploymentName')]"
-                },
-                {
                   "name": "AZURE_SEARCH_ENDPOINT",
                   "value": "[format('https://{0}.search.windows.net', variables('searchServiceName'))]"
                 },
                 {
-                  "name": "AZURE_SEARCH_INDEX",
-                  "value": "[parameters('searchIndexName')]"
+                  "name": "AZURE_SEARCH_KNOWLEDGE_BASE",
+                  "value": "[parameters('knowledgeBaseName')]"
+                },
+                {
+                  "name": "AZURE_SEARCH_KNOWLEDGE_SOURCE",
+                  "value": "[parameters('knowledgeSourceName')]"
                 },
                 {
                   "name": "AZURE_SEARCH_API_VERSION",
-                  "value": "2024-07-01"
-                },
-                {
-                  "name": "AZURE_SEARCH_VECTOR_FIELD",
-                  "value": "contentVector"
-                },
-                {
-                  "name": "AZURE_SEARCH_SEMANTIC_CONFIGURATION",
-                  "value": "default"
+                  "value": "[variables('searchKnowledgeApiVersion')]"
                 },
                 {
                   "name": "AZURE_SEARCH_TOP_K",
                   "value": "5"
+                },
+                {
+                  "name": "AZURE_SEARCH_RERANKER_THRESHOLD",
+                  "value": "2.5"
                 }
               ],
               "resources": {
@@ -552,6 +794,7 @@
         "[resourceId('Microsoft.ContainerRegistry/registries', variables('acrName'))]",
         "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('acrName')), variables('acrPullRoleDefinitionId'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))))]",
         "[resourceId('Microsoft.App/managedEnvironments', variables('containerEnvName'))]",
+        "[resourceId('Microsoft.Resources/deploymentScripts', variables('knowledgeProvisioningScriptName'))]",
         "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))]",
         "[resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName'))]",
         "[extensionResourceId(resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.CognitiveServices/accounts', variables('openAiAccountName')), variables('openAiUserRoleDefinitionId'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('managedIdentityName'))))]",
@@ -666,6 +909,22 @@
     "AZURE_SEARCH_ENDPOINT": {
       "type": "string",
       "value": "[format('https://{0}.search.windows.net', variables('searchServiceName'))]"
+    },
+    "AZURE_AI_FOUNDRY_PROJECT_NAME": {
+      "type": "string",
+      "value": "[parameters('foundryProjectName')]"
+    },
+    "AZURE_AI_FOUNDRY_PROJECT_ID": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.CognitiveServices/accounts/projects', variables('openAiAccountName'), parameters('foundryProjectName'))]"
+    },
+    "AZURE_SEARCH_KNOWLEDGE_SOURCE_NAME": {
+      "type": "string",
+      "value": "[parameters('knowledgeSourceName')]"
+    },
+    "AZURE_SEARCH_KNOWLEDGE_BASE_NAME": {
+      "type": "string",
+      "value": "[parameters('knowledgeBaseName')]"
     },
     "AZURE_STORAGE_ACCOUNT_NAME": {
       "type": "string",

@@ -10,8 +10,14 @@ export interface SearchResult {
   score?: number;
 }
 
-function buildMockResults(query: string): SearchResult[] {
-  return [
+export interface KnowledgeBaseSearchResponse {
+  answer?: string;
+  results: SearchResult[];
+  activity?: unknown;
+}
+
+function buildMockResults(query: string): KnowledgeBaseSearchResponse {
+  const results = [
     {
       id: crypto.randomUUID(),
       title: "Mock: パスワード再設定手順",
@@ -29,6 +35,11 @@ function buildMockResults(query: string): SearchResult[] {
       score: 0.92
     }
   ];
+
+  return {
+    answer: results[0]?.content,
+    results
+  };
 }
 
 async function getSearchHeaders(): Promise<HeadersInit> {
@@ -44,76 +55,194 @@ async function getSearchHeaders(): Promise<HeadersInit> {
   };
 }
 
-async function createEmbedding(query: string): Promise<number[] | undefined> {
-  if (!config.azureOpenAIEmbeddingDeployment) {
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
 
-  const token = await credential.getToken("https://cognitiveservices.azure.com/.default");
-  if (!token?.token) {
-    throw new Error("Failed to acquire Azure OpenAI access token.");
-  }
-
-  const response = await fetch(
-    `${config.azureOpenAIEndpoint}/openai/v1/embeddings`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token.token}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: config.azureOpenAIEmbeddingDeployment,
-        input: query
-      })
-    }
-  );
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Embedding request failed: ${response.status} ${body}`);
-  }
-
-  const payload = (await response.json()) as {
-    data?: Array<{ embedding?: number[] }>;
-  };
-
-  return payload.data?.[0]?.embedding;
+  return value as Record<string, unknown>;
 }
 
-export async function searchKnowledgeBase(query: string): Promise<SearchResult[]> {
-  if (config.mockSearch || !config.azureSearchEndpoint || !config.azureSearchIndex) {
+function asString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
+}
+
+function getNestedString(source: Record<string, unknown> | undefined, keys: string[]): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = asString(source[key]);
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
+}
+
+function getAnswer(payload: Record<string, unknown>): string | undefined {
+  const response = Array.isArray(payload.response) ? payload.response : [];
+  const textParts = response
+    .flatMap((item) => {
+      const record = asRecord(item);
+      return Array.isArray(record?.content) ? record.content : [];
+    })
+    .map((item) => getNestedString(asRecord(item), ["text"]))
+    .filter((item): item is string => Boolean(item));
+
+  if (textParts.length === 0) {
+    return undefined;
+  }
+
+  return textParts.join("\n\n");
+}
+
+function mapReferenceToResult(reference: Record<string, unknown>, index: number): SearchResult {
+  const sourceData =
+    asRecord(reference.sourceData) ??
+    asRecord(reference.source_data) ??
+    asRecord(reference.document) ??
+    asRecord(reference.payload);
+
+  const title =
+    getNestedString(reference, ["title"]) ??
+    getNestedString(sourceData, ["title", "fileName", "filename", "name", "metadata_storage_name"]) ??
+    `Reference ${index + 1}`;
+
+  const content =
+    getNestedString(reference, ["content", "snippet", "text", "excerpt"]) ??
+    getNestedString(sourceData, ["content", "chunk", "text", "summary", "description"]) ??
+    "";
+
+  const source =
+    getNestedString(reference, ["knowledgeSourceName", "source"]) ??
+    getNestedString(sourceData, ["source", "metadata_storage_path", "storagePath", "containerName"]);
+
+  const url =
+    getNestedString(reference, ["url"]) ??
+    getNestedString(sourceData, ["url", "metadata_storage_path"]);
+
+  const score =
+    asNumber(reference.score) ??
+    asNumber(reference.rerankerScore) ??
+    asNumber(reference.searchScore);
+
+  return {
+    id:
+      getNestedString(reference, ["referenceId", "reference_id", "id"]) ??
+      getNestedString(sourceData, ["id", "chunkId"]) ??
+      crypto.randomUUID(),
+    title,
+    content,
+    source,
+    url,
+    score
+  };
+}
+
+function mapRetrieveResponse(payload: Record<string, unknown>): KnowledgeBaseSearchResponse {
+  const answer = getAnswer(payload);
+  const references = Array.isArray(payload.references) ? payload.references : [];
+  const results = references
+    .map((reference, index) => mapReferenceToResult(asRecord(reference) ?? {}, index))
+    .filter((result) => result.content.length > 0 || result.title.length > 0)
+    .slice(0, config.azureSearchTopK);
+
+  if (results.length > 0) {
+    return {
+      answer,
+      results,
+      activity: payload.activity
+    };
+  }
+
+  return {
+    answer,
+    results: answer
+      ? [
+          {
+            id: crypto.randomUUID(),
+            title: "Knowledge base answer",
+            content: answer,
+            source: config.azureSearchKnowledgeBase
+          }
+        ]
+      : [],
+    activity: payload.activity
+  };
+}
+
+function getRequiredSearchConfig(): {
+  endpoint: string;
+  knowledgeBase: string;
+  knowledgeSource: string;
+} {
+  if (!config.azureSearchEndpoint) {
+    throw new Error("Missing required environment variable: AZURE_SEARCH_ENDPOINT");
+  }
+
+  if (!config.azureSearchKnowledgeBase) {
+    throw new Error("Missing required environment variable: AZURE_SEARCH_KNOWLEDGE_BASE");
+  }
+
+  if (!config.azureSearchKnowledgeSource) {
+    throw new Error("Missing required environment variable: AZURE_SEARCH_KNOWLEDGE_SOURCE");
+  }
+
+  return {
+    endpoint: config.azureSearchEndpoint,
+    knowledgeBase: config.azureSearchKnowledgeBase,
+    knowledgeSource: config.azureSearchKnowledgeSource
+  };
+}
+
+export async function searchKnowledgeBase(query: string): Promise<KnowledgeBaseSearchResponse> {
+  if (config.mockSearch) {
     return buildMockResults(query);
   }
 
+  const { endpoint, knowledgeBase, knowledgeSource } = getRequiredSearchConfig();
   const headers = await getSearchHeaders();
-  const embedding = await createEmbedding(query);
-
-  const body: Record<string, unknown> = {
-    count: true,
-    search: query,
-    queryType: config.azureSearchSemanticConfiguration ? "semantic" : "simple",
-    top: config.azureSearchTopK,
-    select: "id,title,content,source,url"
+  const knowledgeSourceParams: Record<string, unknown> = {
+    knowledgeSourceName: knowledgeSource,
+    kind: "searchIndex",
+    includeReferences: true,
+    includeReferenceSourceData: true,
+    alwaysQuerySource: true
   };
 
-  if (config.azureSearchSemanticConfiguration) {
-    body.semanticConfiguration = config.azureSearchSemanticConfiguration;
+  if (typeof config.azureSearchRerankerThreshold === "number") {
+    knowledgeSourceParams.rerankerThreshold = config.azureSearchRerankerThreshold;
   }
 
-  if (embedding) {
-    body.vectorQueries = [
+  const body = {
+    messages: [
       {
-        kind: "vector",
-        vector: embedding,
-        fields: config.azureSearchVectorField,
-        k: config.azureSearchTopK
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: query
+          }
+        ]
       }
-    ];
-  }
+    ],
+    knowledgeSourceParams: [knowledgeSourceParams],
+    includeActivity: true,
+    outputMode: "answerSynthesis",
+    retrievalReasoningEffort: {
+      kind: "low"
+    }
+  };
 
   const response = await fetch(
-    `${config.azureSearchEndpoint}/indexes/${config.azureSearchIndex}/docs/search?api-version=${config.azureSearchApiVersion}`,
+    `${endpoint}/knowledgebases/${knowledgeBase}/retrieve?api-version=${config.azureSearchApiVersion}`,
     {
       method: "POST",
       headers,
@@ -123,19 +252,14 @@ export async function searchKnowledgeBase(query: string): Promise<SearchResult[]
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Azure AI Search request failed: ${response.status} ${errorText}`);
+    throw new Error(`Azure AI Search knowledge base request failed: ${response.status} ${errorText}`);
   }
 
-  const payload = (await response.json()) as {
-    value?: Array<Record<string, unknown>>;
-  };
+  const payload = asRecord(await response.json());
 
-  return (payload.value ?? []).map((item) => ({
-    id: String(item.id ?? crypto.randomUUID()),
-    title: String(item.title ?? "Untitled"),
-    content: String(item.content ?? ""),
-    source: item.source ? String(item.source) : undefined,
-    url: item.url ? String(item.url) : undefined,
-    score: typeof item["@search.score"] === "number" ? Number(item["@search.score"]) : undefined
-  }));
+  if (!payload) {
+    throw new Error("Azure AI Search knowledge base response was empty.");
+  }
+
+  return mapRetrieveResponse(payload);
 }
