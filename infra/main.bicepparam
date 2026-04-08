@@ -1,7 +1,7 @@
 using './main.bicep'
 
-param environmentName = 'gptrealtime-dev'
-param location = 'eastus2'
+param environmentName = readEnvironmentVariable('AZURE_ENV_NAME', 'gptrealtime-dev')
+param location = readEnvironmentVariable('AZURE_LOCATION', 'eastus2')
 
 param mockSearch = false
 param knowledgeContainerName = 'knowledge'
@@ -24,7 +24,8 @@ param openAiRealtimeCapacity = 1
 param openAiEmbeddingDeploymentName = 'text-embedding-3-large'
 param openAiEmbeddingModelName = 'text-embedding-3-large'
 param openAiEmbeddingModelVersion = '1'
-param openAiEmbeddingCapacity = 1
+// The Search ingestion pipeline hit Azure OpenAI rate limits when this was 1.
+param openAiEmbeddingCapacity = 882
 
 param openAiChatDeploymentName = 'gpt-4.1-mini'
 param openAiChatModelName = 'gpt-4.1-mini'

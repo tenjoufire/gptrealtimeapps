@@ -8,7 +8,7 @@
 - Azure Storage Account と `knowledge` Blob コンテナ
 - Azure AI Search
 - Azure AI Foundry project
-- Azure AI Search knowledge source / knowledge base を作る deployment script
+- Azure AI Search knowledge source / knowledge base を作る postprovision hook 用スクリプト
 - Azure AI Services account と 3 つの deployment
 - User Assigned Managed Identity
 - Azure Container Apps Environment
@@ -39,6 +39,7 @@ realtime deployment 名は `gpt-realtime-1.5`、embedding deployment 名は `tex
 - `knowledgeBaseName`
 - `openAiRealtimeModelName`
 - `openAiRealtimeModelVersion`
+- `openAiEmbeddingCapacity`
 - `openAiEmbeddingModelVersion`
 - `openAiChatModelName`
 - `openAiChatModelVersion`
@@ -49,7 +50,7 @@ realtime deployment 名は `gpt-realtime-1.5`、embedding deployment 名は `tex
 ## デプロイ手順
 
 1. `azd env new <environment-name>` を実行します。
-2. `azd env set AZURE_LOCATION eastus2` を実行します。
+2. `azd env set AZURE_LOCATION swedencentral` を実行します。
 3. 必要なら `main.parameters.json` または `main.bicepparam` の値を更新します。
 4. `azd up` を実行します。
 
@@ -57,7 +58,7 @@ realtime deployment 名は `gpt-realtime-1.5`、embedding deployment 名は `tex
 
 - Azure リソースの作成
 - Foundry project と Search connection の作成
-- deployment script による Azure AI Search knowledge source / knowledge base の作成
+- postprovision hook による Azure AI Search knowledge source / knowledge base の作成
 - ACR remote build
 - Container Apps の更新
 
@@ -72,13 +73,15 @@ az deployment group create \
 
 ## knowledge source と knowledge base について
 
-Azure AI Search の knowledge source / knowledge base は 2025-11-01-preview の data plane API を使って作成します。Bicep では preview data plane object を直接表現しづらいため、`scripts/provision-search-kb.sh` を deployment script として呼び出しています。
+Azure AI Search の knowledge source / knowledge base は 2025-11-01-preview の data plane API を使って作成します。Bicep では preview data plane object を直接表現しづらく、さらに `Microsoft.Resources/deploymentScripts` は shared key を必要とするため、このリポジトリでは `azd` の postprovision hook から `scripts/provision-search-kb.sh` を呼び出しています。
 
-この deployment script は次を行います。
+この postprovision hook は次を行います。
 
 - Blob knowledge source を PUT で idempotent に作成または更新
 - knowledge base を PUT で idempotent に作成または更新
 - Search RBAC 反映待ちに備えて `az rest` をリトライ
+
+`disableImageVerbalization` のような ingestion 設定変更で `chatCompletionModel` 構成の再設定が必要になる場合、Azure AI Search は既存 knowledge source への上書きを受け付けません。このため `scripts/provision-search-kb.sh` は該当エラーを検知すると、参照している knowledge base を先に削除し、knowledge source と knowledge base を同名で再作成します。
 
 ## ドキュメント投入時の注意
 
@@ -92,7 +95,7 @@ azd provision
 
 ## 補足
 
-- Storage は shared key を無効化し、Search と deployment script は Microsoft Entra ベースでアクセスします。
+- Storage は shared key を無効化し、Search と postprovision hook は Microsoft Entra ベースでアクセスします。
 - Search service 自身の system-assigned identity に `Storage Blob Data Reader` と `Cognitive Services OpenAI User` を割り当てています。
 - Foundry project には system-assigned identity を付与し、Azure AI Search へ `Search Index Data Reader` を割り当てています。
 - `allowedOrigin` は初期 bring-up 用に `*` を許容しています。本番では web UI の URL に固定してください。

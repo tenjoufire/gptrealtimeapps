@@ -66,8 +66,8 @@ param openAiEmbeddingModelName string
 @description('Embedding model version for the Azure OpenAI deployment.')
 param openAiEmbeddingModelVersion string
 
-@description('Capacity for the embedding deployment.')
-param openAiEmbeddingCapacity int = 1
+@description('Capacity for the embedding deployment. This workload needs higher throughput than the Azure OpenAI default to avoid Search ingestion throttling.')
+param openAiEmbeddingCapacity int = 882
 
 @description('Chat deployment used by Azure AI Search knowledge source ingestion and answer synthesis.')
 param openAiChatDeploymentName string = 'gpt-4.1-mini'
@@ -96,16 +96,13 @@ var searchServiceName = 'azsea${resourceToken}'
 var openAiAccountName = 'azai${resourceToken}'
 var openAiSubdomain = 'azai${resourceToken}'
 var managedIdentityName = 'azid${resourceToken}'
-var knowledgeProvisionerIdentityName = 'azidp${resourceToken}'
 var containerEnvName = 'azcae${resourceToken}'
 var agentAppName = 'azcaa${resourceToken}'
 var webAppName = 'azcaw${resourceToken}'
-var knowledgeProvisioningScriptName = 'azdks${resourceToken}'
 
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var storageBlobDataReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1')
 var searchIndexDataReaderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '1407120a-92aa-4202-b7e9-c0e197c71c8f')
-var searchServiceContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
 var openAiUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -201,7 +198,7 @@ resource knowledgeContainer 'Microsoft.Storage/storageAccounts/blobServices/cont
   }
 }
 
-resource search 'Microsoft.Search/searchServices@2025-02-01-preview' = {
+resource search 'Microsoft.Search/searchServices@2025-05-01' = {
   name: searchServiceName
   location: location
   tags: tags
@@ -212,15 +209,10 @@ resource search 'Microsoft.Search/searchServices@2025-02-01-preview' = {
     name: searchSku
   }
   properties: {
-    authOptions: {
-      aadOrApiKey: {
-        aadAuthFailureMode: 'http401WithBearerChallenge'
-      }
-    }
     disableLocalAuth: true
-    hostingMode: 'default'
+    hostingMode: 'Default'
     partitionCount: searchPartitionCount
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: 'enabled'
     replicaCount: searchReplicaCount
     semanticSearch: 'standard'
   }
@@ -364,22 +356,6 @@ resource foundryProjectSearchReaderAssignment 'Microsoft.Authorization/roleAssig
   }
 }
 
-resource knowledgeProvisionerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: knowledgeProvisionerIdentityName
-  location: location
-  tags: tags
-}
-
-resource knowledgeProvisionerSearchContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(search.id, searchServiceContributorRoleDefinitionId, knowledgeProvisionerIdentity.id)
-  scope: search
-  properties: {
-    principalId: knowledgeProvisionerIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: searchServiceContributorRoleDefinitionId
-  }
-}
-
 resource foundrySearchConnection 'Microsoft.CognitiveServices/accounts/projects/connections@2025-06-01' = {
   parent: foundryProject
   name: foundrySearchConnectionName
@@ -392,89 +368,6 @@ resource foundrySearchConnection 'Microsoft.CognitiveServices/accounts/projects/
   }
   dependsOn: [
     foundryProjectSearchReaderAssignment
-  ]
-}
-
-resource knowledgeBaseProvisioningScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
-  name: knowledgeProvisioningScriptName
-  location: location
-  tags: tags
-  kind: 'AzureCLI'
-  identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${knowledgeProvisionerIdentity.id}': {}
-    }
-  }
-  properties: {
-    azCliVersion: '2.64.0'
-    cleanupPreference: 'OnSuccess'
-    containerSettings: {
-      containerGroupName: 'azdks-${resourceToken}'
-    }
-    environmentVariables: [
-      {
-        name: 'AZURE_CLIENT_ID'
-        value: knowledgeProvisionerIdentity.properties.clientId
-      }
-      {
-        name: 'SEARCH_ENDPOINT'
-        value: 'https://${search.name}.search.windows.net'
-      }
-      {
-        name: 'SEARCH_API_VERSION'
-        value: searchKnowledgeApiVersion
-      }
-      {
-        name: 'KNOWLEDGE_SOURCE_NAME'
-        value: knowledgeSourceName
-      }
-      {
-        name: 'KNOWLEDGE_BASE_NAME'
-        value: knowledgeBaseName
-      }
-      {
-        name: 'STORAGE_RESOURCE_ID'
-        value: storage.id
-      }
-      {
-        name: 'STORAGE_CONTAINER_NAME'
-        value: knowledgeContainerName
-      }
-      {
-        name: 'OPENAI_ENDPOINT'
-        value: openAi.properties.endpoint
-      }
-      {
-        name: 'OPENAI_CHAT_DEPLOYMENT_NAME'
-        value: openAiChatDeploymentName
-      }
-      {
-        name: 'OPENAI_CHAT_MODEL_NAME'
-        value: openAiChatModelName
-      }
-      {
-        name: 'OPENAI_EMBEDDING_DEPLOYMENT_NAME'
-        value: openAiEmbeddingDeploymentName
-      }
-      {
-        name: 'OPENAI_EMBEDDING_MODEL_NAME'
-        value: openAiEmbeddingModelName
-      }
-    ]
-    forceUpdateTag: uniqueString(knowledgeSourceName, knowledgeBaseName, openAiChatDeploymentName, openAiEmbeddingDeploymentName, knowledgeContainerName, searchKnowledgeApiVersion)
-    retentionInterval: 'P1D'
-    scriptContent: loadTextContent('scripts/provision-search-kb.sh')
-    timeout: 'PT30M'
-  }
-  dependsOn: [
-    chatDeployment
-    embeddingDeployment
-    foundrySearchConnection
-    knowledgeContainer
-    knowledgeProvisionerSearchContributorAssignment
-    searchToOpenAiAssignment
-    searchToStorageAssignment
   ]
 }
 
@@ -622,7 +515,6 @@ resource agentApp 'Microsoft.App/containerApps@2025-01-01' = {
   }
   dependsOn: [
     acrPullAssignment
-    knowledgeBaseProvisioningScript
     openAiUserAssignment
     searchReaderAssignment
   ]
@@ -716,3 +608,15 @@ output AZURE_SEARCH_KNOWLEDGE_SOURCE_NAME string = knowledgeSourceName
 output AZURE_SEARCH_KNOWLEDGE_BASE_NAME string = knowledgeBaseName
 output AZURE_STORAGE_ACCOUNT_NAME string = storage.name
 output AZURE_KNOWLEDGE_CONTAINER_NAME string = knowledgeContainerName
+output MOCK_SEARCH string = mockSearch ? 'true' : 'false'
+output SEARCH_ENDPOINT string = 'https://${search.name}.search.windows.net'
+output SEARCH_API_VERSION string = searchKnowledgeApiVersion
+output KNOWLEDGE_SOURCE_NAME string = knowledgeSourceName
+output KNOWLEDGE_BASE_NAME string = knowledgeBaseName
+output STORAGE_RESOURCE_ID string = storage.id
+output STORAGE_CONTAINER_NAME string = knowledgeContainerName
+output OPENAI_ENDPOINT string = openAi.properties.endpoint
+output OPENAI_CHAT_DEPLOYMENT_NAME string = openAiChatDeploymentName
+output OPENAI_CHAT_MODEL_NAME string = openAiChatModelName
+output OPENAI_EMBEDDING_DEPLOYMENT_NAME string = openAiEmbeddingDeploymentName
+output OPENAI_EMBEDDING_MODEL_NAME string = openAiEmbeddingModelName

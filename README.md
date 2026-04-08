@@ -40,7 +40,6 @@ graph TB
         end
 
         ManagedID["User Assigned MI\nfor Container Apps"]
-        ProvisionerID["User Assigned MI\nfor KB provisioning"]
 
         subgraph Monitor["Monitoring"]
             LogAnalytics["Log Analytics"]
@@ -61,7 +60,6 @@ graph TB
     Search -- "Cognitive Services User" --> EmbeddingModel
     FoundryProject -- "AAD connection" --> Search
 
-    ProvisionerID -- "Search Service Contributor" --> Search
     ManagedID -. "AcrPull" .-> ACR
     ManagedID -. "OpenAI User" .-> AIS
     ManagedID -. "Search Index Data Reader" .-> Search
@@ -81,7 +79,7 @@ graph TB
 | **Azure AI Search** | Search Service | Blob knowledge source と knowledge base をホスト |
 | **Azure Storage** | Storage Account | `knowledge` Blob コンテナにドキュメントを格納 |
 | **Azure Container Registry** | Container Registry | agent-app / web-ui の Docker イメージを格納 |
-| **Managed Identities** | Managed Identity | Container Apps と KB provisioning script の RBAC 実行主体 |
+| **Managed Identities** | Managed Identity | Container Apps の RBAC 実行主体 |
 | **Log Analytics / App Insights** | Monitoring | ログ収集と診断 |
 
 ## 通信フローの概要
@@ -103,7 +101,6 @@ graph TB
 | Azure AI Search の System MI | Azure Storage | Storage Blob Data Reader |
 | Azure AI Search の System MI | Azure AI Services | Cognitive Services OpenAI User |
 | Azure AI Foundry Project の System MI | Azure AI Search | Search Index Data Reader |
-| KB provisioning 用 User Assigned MI | Azure AI Search | Search Service Contributor |
 
 ## ディレクトリ構成
 
@@ -191,7 +188,7 @@ AZURE_SEARCH_API_VERSION=2025-11-01-preview
 
 ```bash
 azd env new <environment-name>
-azd env set AZURE_LOCATION eastus2
+azd env set AZURE_LOCATION swedencentral
 ```
 
 ### 2. パラメータ確認
@@ -200,6 +197,7 @@ azd env set AZURE_LOCATION eastus2
 
 - `openAiRealtimeModelName`
 - `openAiRealtimeModelVersion`
+- `openAiEmbeddingCapacity`
 - `openAiEmbeddingModelVersion`
 - `openAiChatModelName`
 - `openAiChatModelVersion`
@@ -208,7 +206,7 @@ azd env set AZURE_LOCATION eastus2
 - `knowledgeBaseName`
 - `mockSearch`
 
-既定値では、realtime モデルに `gpt-realtime` / `2025-08-28`、knowledge base 用 chat モデルに `gpt-4.1-mini` / `2025-04-14`、embedding に `text-embedding-3-large` / `1` を使います。
+既定値では、realtime モデルに `gpt-realtime` / `2025-08-28`、knowledge base 用 chat モデルに `gpt-4.1-mini` / `2025-04-14`、embedding に `text-embedding-3-large` / `1` を使い、embedding deployment capacity は `882` を使います。
 
 ### 3. デプロイ
 
@@ -220,7 +218,7 @@ azd up
 
 - `infra/main.bicep` で Azure リソースを作成
 - Azure AI Foundry project と Search connection を作成
-- deployment script で Blob knowledge source と knowledge base を作成
+- postprovision hook で Blob knowledge source と knowledge base を作成
 - `agent-app` と `web-ui` の Dockerfile を ACR remote build で build
 - Container Apps の placeholder image を実アプリ image に更新
 
@@ -232,10 +230,10 @@ azd up
 azd provision
 ```
 
-これで deployment script が再実行され、knowledge source / knowledge base を同じ名前で再作成します。ストレージアカウント名とコンテナ名は `azd up` の outputs として確認できます。
+これで postprovision hook が再実行され、knowledge source / knowledge base を同じ名前で再適用します。ストレージアカウント名とコンテナ名は `azd up` の outputs として確認できます。
 
 ## 補足
 
 - `web-ui` は `runtime-config.js` を使って実行時に Agent App の URL を読むため、先に Agent App の URL が確定していなくても `azd up` を 1 回で実行できます。
-- Azure AI Search knowledge source / knowledge base は preview API を使っているため、Bicep から deployment script 経由で data plane object を作成しています。
+- Azure AI Search knowledge source / knowledge base は preview API を使っているため、`azd` の postprovision hook から `infra/scripts/provision-search-kb.sh` を実行して data plane object を作成しています。
 - `MOCK_SEARCH=true` にすると backend は Search を呼ばずモック応答を返します。
