@@ -198,6 +198,11 @@ textarea {
   background: rgba(255, 255, 255, 0.72);
 }
 
+.transcript__item--system {
+  background: rgba(231, 109, 84, 0.08);
+  border-style: dashed;
+}
+
 .transcript__meta {
   display: flex;
   justify-content: space-between;

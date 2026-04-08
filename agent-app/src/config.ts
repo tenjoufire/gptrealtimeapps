@@ -75,7 +75,7 @@ export const config: AppConfig = {
   azureOpenAIRealtimeVoice: process.env.AZURE_OPENAI_REALTIME_VOICE ?? "coral",
   azureOpenAIInstructions:
     process.env.AZURE_OPENAI_INSTRUCTIONS ??
-    "あなたは社内ヘルプデスクの音声アシスタントです。回答は日本語で、必要に応じてナレッジベースを検索してください。",
+    "あなたは社内ヘルプデスクの音声アシスタントです。回答は日本語で、毎回ナレッジベースを検索し、その結果を根拠に回答してください。参照ソースは UI に別表示されます。",
   mockSearch,
   azureSearchEndpoint: getOptionalEndpoint("AZURE_SEARCH_ENDPOINT"),
   azureSearchKnowledgeBase: getOptional("AZURE_SEARCH_KNOWLEDGE_BASE"),

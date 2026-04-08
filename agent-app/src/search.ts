@@ -5,6 +5,7 @@ export interface SearchResult {
   id: string;
   title: string;
   content: string;
+  fileName?: string;
   source?: string;
   url?: string;
   score?: number;
@@ -22,7 +23,8 @@ function buildMockResults(query: string): KnowledgeBaseSearchResponse {
       id: crypto.randomUUID(),
       title: "Mock: パスワード再設定手順",
       content: `検索モック応答です。ユーザーの問い合わせ「${query}」に対して、本人確認後にパスワード再設定リンクを案内してください。`,
-      source: "mock-kb",
+      fileName: "password-reset.md",
+      source: "password-reset.md",
       url: "https://example.local/mock/password-reset",
       score: 1
     },
@@ -30,7 +32,8 @@ function buildMockResults(query: string): KnowledgeBaseSearchResponse {
       id: crypto.randomUUID(),
       title: "Mock: VPN 接続トラブル",
       content: "VPN 利用時は端末再起動、資格情報の再入力、MFA の再実施を順に確認します。改善しない場合は IT 管理者へエスカレーションします。",
-      source: "mock-kb",
+      fileName: "vpn-help.md",
+      source: "vpn-help.md",
       url: "https://example.local/mock/vpn-help",
       score: 0.92
     }
@@ -86,6 +89,25 @@ function getNestedString(source: Record<string, unknown> | undefined, keys: stri
   return undefined;
 }
 
+function extractFileName(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const withoutQuery = value.split(/[?#]/, 1)[0]?.replace(/\\/g, "/");
+  const candidate = withoutQuery?.split("/").filter(Boolean).at(-1);
+
+  if (!candidate) {
+    return undefined;
+  }
+
+  try {
+    return decodeURIComponent(candidate);
+  } catch {
+    return candidate;
+  }
+}
+
 function getAnswer(payload: Record<string, unknown>): string | undefined {
   const response = Array.isArray(payload.response) ? payload.response : [];
   const textParts = response
@@ -110,8 +132,22 @@ function mapReferenceToResult(reference: Record<string, unknown>, index: number)
     asRecord(reference.document) ??
     asRecord(reference.payload);
 
+  const sourcePath =
+    getNestedString(reference, ["blobUrl", "blobURL"]) ??
+    getNestedString(sourceData, ["source", "metadata_storage_path", "storagePath"]);
+  const url =
+    getNestedString(reference, ["url", "blobUrl", "blobURL"]) ??
+    getNestedString(sourceData, ["url", "metadata_storage_path"]);
+
+  const fileName =
+    getNestedString(reference, ["fileName", "filename"]) ??
+    getNestedString(sourceData, ["fileName", "filename", "metadata_storage_name", "name"]) ??
+    extractFileName(url) ??
+    extractFileName(sourcePath);
+
   const title =
     getNestedString(reference, ["title"]) ??
+    fileName ??
     getNestedString(sourceData, ["title", "fileName", "filename", "name", "metadata_storage_name"]) ??
     `Reference ${index + 1}`;
 
@@ -121,12 +157,11 @@ function mapReferenceToResult(reference: Record<string, unknown>, index: number)
     "";
 
   const source =
-    getNestedString(reference, ["knowledgeSourceName", "source"]) ??
-    getNestedString(sourceData, ["source", "metadata_storage_path", "storagePath", "containerName"]);
-
-  const url =
-    getNestedString(reference, ["url"]) ??
-    getNestedString(sourceData, ["url", "metadata_storage_path"]);
+    fileName ??
+    getNestedString(reference, ["source"]) ??
+    sourcePath ??
+    getNestedString(reference, ["knowledgeSourceName"]) ??
+    getNestedString(sourceData, ["containerName"]);
 
   const score =
     asNumber(reference.score) ??
@@ -140,6 +175,7 @@ function mapReferenceToResult(reference: Record<string, unknown>, index: number)
       crypto.randomUUID(),
     title,
     content,
+    fileName,
     source,
     url,
     score
@@ -164,16 +200,7 @@ function mapRetrieveResponse(payload: Record<string, unknown>): KnowledgeBaseSea
 
   return {
     answer,
-    results: answer
-      ? [
-          {
-            id: crypto.randomUUID(),
-            title: "Knowledge base answer",
-            content: answer,
-            source: config.azureSearchKnowledgeBase
-          }
-        ]
-      : [],
+    results: [],
     activity: payload.activity
   };
 }

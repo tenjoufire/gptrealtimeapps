@@ -161,6 +161,7 @@ docker compose up --build
 - `agent-app` は Azure OpenAI resource endpoint の `client_secrets` と `realtime/calls` を使って SDP を中継します。
 - `agent-app` は `wss://.../openai/v1/realtime?call_id=...` に observer 接続します。
 - tool `search_knowledge_base` は Azure AI Search knowledge base の `retrieve` API を呼び、answer と references をまとめて返します。
+- `GET /api/search/probe` は Azure AI Search knowledge base の `retrieve` を 1 回実行して、疎通確認用の結果を返します。
 - Foundry project は Search との AAD connection を持ちますが、Realtime 音声 API 自体は Foundry project endpoint ではなく Azure OpenAI resource endpoint を使います。
 
 ## Azure OpenAI / Foundry 設定値
@@ -181,6 +182,15 @@ AZURE_SEARCH_KNOWLEDGE_BASE=helpdesk-kb
 AZURE_SEARCH_KNOWLEDGE_SOURCE=helpdesk-blob-ks
 AZURE_SEARCH_API_VERSION=2025-11-01-preview
 ```
+
+疎通確認は次のように実行できます。
+
+```bash
+curl "http://localhost:8080/api/search/probe"
+curl "http://localhost:8080/api/search/probe?query=VPN%20%E3%81%8C%E7%B9%8B%E3%81%8C%E3%82%89%E3%81%AA%E3%81%84"
+```
+
+成功時は `answer`、`results`、`resultCount`、および実際に使った Search 設定値を JSON で返します。`MOCK_SEARCH=true` の場合も同じエンドポイントでモック応答を確認できます。
 
 ## azd でのデプロイ
 

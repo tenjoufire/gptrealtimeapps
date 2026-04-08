@@ -14,8 +14,17 @@ interface RealtimeEvent {
   delta?: string;
   transcript?: string;
   text?: string;
+  arguments?: string;
+  call_id?: string;
+  callId?: string;
   item?: {
     id?: string;
+    type?: string;
+    name?: string;
+    arguments?: string;
+    output?: string;
+    call_id?: string;
+    callId?: string;
     content?: Array<{
       transcript?: string;
       text?: string;
@@ -23,8 +32,67 @@ interface RealtimeEvent {
   };
 }
 
+interface SearchSource {
+  fileName?: string;
+  title?: string;
+  source?: string;
+  url?: string;
+  score?: number;
+}
+
+interface SearchToolPayload {
+  query?: string;
+  error?: string;
+  results?: SearchSource[];
+}
+
 function randomId(): string {
   return globalThis.crypto.randomUUID();
+}
+
+function parseJson<T>(value: string | undefined): T | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return undefined;
+  }
+}
+
+function formatSearchSources(payload: SearchToolPayload | undefined): string {
+  if (!payload) {
+    return "ナレッジベース検索を実行しました。\n情報ソースを解析できませんでした。";
+  }
+
+  const lines = ["ナレッジベース検索を実行しました。"];
+
+  if (payload.query) {
+    lines.push(`クエリ: ${payload.query}`);
+  }
+
+  if (payload.error) {
+    lines.push(`検索エラー: ${payload.error}`);
+    return lines.join("\n");
+  }
+
+  const results = Array.isArray(payload.results) ? payload.results : [];
+  const fileNames = [...new Set(results.map((result) => result.fileName).filter((value): value is string => Boolean(value)))];
+
+  if (fileNames.length === 0) {
+    lines.push("情報ソース: 該当なし");
+    return lines.join("\n");
+  }
+
+  lines.push("情報ソース (Blob ファイル名):");
+
+  fileNames.forEach((fileName, index) => {
+    lines.push(`${index + 1}. ${fileName}`);
+  });
+
+  return lines.join("\n");
 }
 
 export function useRealtimeSession() {
@@ -37,36 +105,89 @@ export function useRealtimeSession() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const assistantDraftIdRef = useRef<string | null>(null);
+  const assistantDraftTextRef = useRef("");
+  const searchEntryIdsRef = useRef(new Map<string, string>());
 
   function appendEntry(entry: TranscriptEntry): void {
     setEntries((current) => [...current, entry]);
   }
 
-  function upsertAssistantDraft(text: string, isFinal: boolean): void {
+  function upsertEntry(entry: TranscriptEntry): void {
     setEntries((current) => {
-      const draftId = assistantDraftIdRef.current ?? randomId();
-      assistantDraftIdRef.current = isFinal ? null : draftId;
-
-      const index = current.findIndex((item) => item.id === draftId);
-      const nextEntry: TranscriptEntry = {
-        id: draftId,
-        speaker: "assistant",
-        text,
-        final: isFinal
-      };
+      const index = current.findIndex((item) => item.id === entry.id);
 
       if (index === -1) {
-        return [...current, nextEntry];
+        return [...current, entry];
       }
 
       const copy = [...current];
-      copy[index] = nextEntry;
+      copy[index] = entry;
       return copy;
     });
   }
 
+  function upsertAssistantDraft(text: string, isFinal: boolean): void {
+    const draftId = assistantDraftIdRef.current ?? randomId();
+    assistantDraftIdRef.current = isFinal ? null : draftId;
+    assistantDraftTextRef.current = isFinal ? "" : text;
+
+    upsertEntry({
+      id: draftId,
+      speaker: "assistant",
+      text,
+      final: isFinal
+    });
+  }
+
+  function upsertSearchEntry(callId: string, text: string, isFinal: boolean): void {
+    const entryId = searchEntryIdsRef.current.get(callId) ?? randomId();
+
+    searchEntryIdsRef.current.set(callId, entryId);
+
+    upsertEntry({
+      id: entryId,
+      speaker: "system",
+      text,
+      final: isFinal
+    });
+
+    if (isFinal) {
+      searchEntryIdsRef.current.delete(callId);
+    }
+  }
+
+  function startKnowledgeBaseSearch(callId: string, rawArguments: string | undefined): void {
+    const payload = parseJson<{ query?: string }>(rawArguments);
+    const text = payload?.query
+      ? `ナレッジベースを検索しています。\nクエリ: ${payload.query}`
+      : "ナレッジベースを検索しています。";
+
+    upsertSearchEntry(callId, text, false);
+  }
+
+  function finalizeKnowledgeBaseSearch(callId: string, rawOutput: string | undefined): void {
+    const payload = parseJson<SearchToolPayload>(rawOutput);
+    upsertSearchEntry(callId, formatSearchSources(payload), true);
+  }
+
   function handleRealtimeEvent(event: RealtimeEvent): void {
     switch (event.type) {
+      case "conversation.item.created": {
+        if (event.item?.type === "function_call" && event.item.name === "search_knowledge_base") {
+          const callId = event.item.call_id ?? event.item.callId;
+          if (callId) {
+            startKnowledgeBaseSearch(callId, event.item.arguments ?? event.arguments);
+          }
+        }
+
+        if (event.item?.type === "function_call_output") {
+          const callId = event.item.call_id ?? event.item.callId ?? event.call_id ?? event.callId;
+          if (callId) {
+            finalizeKnowledgeBaseSearch(callId, event.item.output);
+          }
+        }
+        break;
+      }
       case "conversation.item.input_audio_transcription.completed": {
         const text =
           event.transcript ?? event.item?.content?.[0]?.transcript ?? event.item?.content?.[0]?.text ?? "";
@@ -80,16 +201,26 @@ export function useRealtimeSession() {
         }
         break;
       }
+      case "response.function_call_arguments.done": {
+        const callId = event.call_id ?? event.callId;
+        if (callId) {
+          startKnowledgeBaseSearch(callId, event.arguments);
+        }
+        break;
+      }
       case "response.output_text.delta":
-      case "response.output_audio_transcript.delta": {
+      case "response.output_audio_transcript.delta":
+      case "response.text.delta":
+      case "response.audio_transcript.delta": {
         if (event.delta) {
-          const previous = entries.find((item) => item.id === assistantDraftIdRef.current)?.text ?? "";
-          upsertAssistantDraft(previous + event.delta, false);
+          upsertAssistantDraft(`${assistantDraftTextRef.current}${event.delta}`, false);
         }
         break;
       }
       case "response.output_text.done":
-      case "response.output_audio_transcript.done": {
+      case "response.output_audio_transcript.done":
+      case "response.text.done":
+      case "response.audio_transcript.done": {
         const finalText = event.text ?? event.transcript;
         if (finalText) {
           upsertAssistantDraft(finalText, true);
@@ -191,6 +322,8 @@ export function useRealtimeSession() {
     }
 
     assistantDraftIdRef.current = null;
+    assistantDraftTextRef.current = "";
+    searchEntryIdsRef.current.clear();
     setStatus("idle");
   }
 

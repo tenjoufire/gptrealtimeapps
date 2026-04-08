@@ -23,7 +23,7 @@ export function TranscriptPanel({ entries }: TranscriptPanelProps) {
       {entries.map((entry) => (
         <article key={entry.id} className={`transcript__item transcript__item--${entry.speaker}`}>
           <header className="transcript__meta">
-            <span>{entry.speaker === "user" ? "あなた" : entry.speaker === "assistant" ? "ヘルプデスク" : "system"}</span>
+            <span>{entry.speaker === "user" ? "あなた" : entry.speaker === "assistant" ? "ヘルプデスク" : "RAG"}</span>
             <span>{entry.final ? "final" : "streaming"}</span>
           </header>
           <p>{entry.text}</p>

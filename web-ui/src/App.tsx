@@ -35,7 +35,7 @@ export default function App() {
         <article className="panel panel--transcript">
           <header className="panel__header">
             <h2>Transcript</h2>
-            <p>ユーザー音声の文字起こしと、AI 応答のストリームを表示します。</p>
+            <p>ユーザー音声の文字起こし、AI 応答のストリーム、参照したナレッジベースの情報ソースを表示します。</p>
           </header>
           <TranscriptPanel entries={entries} />
         </article>

@@ -4,7 +4,7 @@ export const realtimeTools = [
   {
     type: "function",
     name: "search_knowledge_base",
-    description: "ヘルプデスク用ナレッジベースを検索し、回答に必要な情報を取得します。",
+    description: "ヘルプデスク用ナレッジベースを検索し、回答に必要な情報と参照ソースを取得します。すべてのユーザー問い合わせで回答前に必ず使用してください。参照ソースは UI で別表示されるため、回答本文で列挙する必要はありません。",
     parameters: {
       type: "object",
       properties: {
@@ -63,6 +63,7 @@ export async function executeTool(name: string, rawArguments: string): Promise<T
         query: parsed.query,
         answer: results.answer,
         results: results.results.map((item) => ({
+          fileName: item.fileName,
           title: item.title,
           content: item.content,
           source: item.source,

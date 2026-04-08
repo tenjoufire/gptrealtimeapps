@@ -35,11 +35,23 @@ function log(message: string, extra?: unknown): void {
   console.log(`[agent-app] ${message}`);
 }
 
+function buildSessionInstructions(): string {
+  return [
+    config.azureOpenAIInstructions.trim(),
+    "運用ルール:",
+    "- すべてのユーザー発話で、回答を始める前に必ず search_knowledge_base を呼び出してください。",
+    "- 回答は必ず search_knowledge_base の結果を根拠にし、検索結果にない情報を事実として断定しないでください。",
+    "- 検索結果が見つからない、または根拠が不十分な場合は、その旨を明確に伝えてください。",
+    "- 情報ソースは UI 側で Blob のファイル名として別表示されるため、回答本文や音声ではファイル名・URL・source を列挙したり読み上げたりしないでください。",
+    "- ユーザーが明示的に出典の説明を求めた場合のみ、検索で見つかった文書があることを簡潔に伝えてください。"
+  ].join("\n");
+}
+
 function buildSessionConfig() {
   return {
     type: "realtime",
     model: config.azureOpenAIRealtimeDeployment,
-    instructions: config.azureOpenAIInstructions,
+    instructions: buildSessionInstructions(),
     audio: {
       output: {
         voice: config.azureOpenAIRealtimeVoice
@@ -51,7 +63,7 @@ function buildSessionConfig() {
     input_audio_transcription: {
       model: "whisper-1"
     },
-    tool_choice: "auto",
+    tool_choice: "required",
     tools: realtimeTools
   };
 }
@@ -60,7 +72,15 @@ function buildClientSecretSessionConfig() {
   return {
     session: {
       type: "realtime",
-      model: config.azureOpenAIRealtimeDeployment
+      model: config.azureOpenAIRealtimeDeployment,
+      instructions: buildSessionInstructions(),
+      audio: {
+        output: {
+          voice: config.azureOpenAIRealtimeVoice
+        }
+      },
+      tool_choice: "required",
+      tools: realtimeTools
     }
   };
 }
@@ -145,7 +165,10 @@ async function handleFunctionCall(ws: WebSocket, event: RealtimeFunctionCallEven
 
   ws.send(
     JSON.stringify({
-      type: "response.create"
+      type: "response.create",
+      response: {
+        tool_choice: "none"
+      }
     })
   );
 }
